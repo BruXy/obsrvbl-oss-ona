@@ -21,10 +21,21 @@
 #    wrong.
 #
 
+# Use oficial Ubuntu image
 RELEASE="${RELEASE:-22.04.4}"
 ARCH="${ARCH:-amd64}"
 VARIANT="${VARIANT:-subiquity}"
+AUTOINSTALL="${AUTOINSTALL:-nocloud}"
 
+# Download ona-service.deb package from private S3 bucket
+PRIVATE_ONA="${PRIVATE_ONA:-false}"
+
+if [ ! -f autoinstall/${AUTOINSTALL}-dhcp/user-data -o \
+     ! -f autoinstall/${AUTOINSTALL}-nodhcp/user-data  ] ; then
+    printf "Autoinstall profile %s does not exist!\n" 1>&2
+    printf "Exiting...\n\n" 1>&2
+    exit 1
+fi
 
 DIR=$(cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)
 
@@ -33,7 +44,7 @@ fatal() {
     exit 1
 }
 
-while getopts "f:a:r:" opt ; do
+while getopts "f:a:r:u:" opt ; do
     case $opt in
         f) url="file://$(readlink -f $OPTARG)"
            ;;
@@ -41,19 +52,30 @@ while getopts "f:a:r:" opt ; do
            ;;
         r) RELEASE="$OPTARG"
            ;;
+        u) ISO_URL="$OPTARG"
+            ;;
         ?) fatal "invalid argument"
            ;;
     esac
 done
 
-ubuntu_name="ubuntu-${RELEASE}-server-${ARCH}.iso"
-ona_name="ona-${RELEASE}-server-${ARCH}.iso"
-ubuntu_url="${url:-$($DIR/build_iso_helper $RELEASE $VARIANT)}"
-test -n "$ubuntu_url" || fatal "failed getting Ubuntu ISO download URL"
+if [[ -z "$ISO_URL" ]] ; then
+    # Use build_iso_helper to determine URL of ISO image
+    ubuntu_name="ubuntu-${RELEASE}-server-${ARCH}.iso"
+    ona_name="ona-${RELEASE}-server-${ARCH}.iso"
+    ubuntu_url="${url:-$($DIR/build_iso_helper $RELEASE $VARIANT)}"
+    test -n "$ubuntu_url" || fatal "failed getting Ubuntu ISO download URL"
+else
+    # URL of ISO provided from command-line
+    ubuntu_name=$(basename "$ISO_URL")
+    ona_name="ona-$ubuntu_name"
+    ubuntu_url="$ISO_URL"
+fi
 
-ONA_URL="https://s3.amazonaws.com/onstatic/ona-service/master/"
-if [ -n "$PUBLIC_ONA" ]; then
-  ONA_URL="https://assets-production.obsrvbl.com/ona-packages/obsrvbl-ona/v5.1.2/"
+if [[ "$PRIVATE_ONA" == "true" ]] ; then
+    ONA_URL="https://s3.amazonaws.com/onstatic/ona-service/master/"
+else
+    ONA_URL="https://assets-production.obsrvbl.com/ona-packages/obsrvbl-ona/v5.1.2/"
 fi
 
 ona_service_url="${ONA_URL}ona-service_UbuntuXenial_amd64.deb"
@@ -88,12 +110,13 @@ fi
   if [ ! -e "$ubuntu_name" ]; then
     curl -L -o ${ubuntu_name} "${ubuntu_url}"
   fi
-  
+
   cd "$DIR"/working
   curl -L -o netsa-pkg.deb "${netsa_pkg_url}"
   curl -L -o ona-service.deb "${ona_service_url}"
   # local is root dir in ISO
-  mkdir cdrom local
+  [ -d cdrom ] || mkdir cdrom
+  [ -d local ] || mkdir local
 
   $sudo mount -o loop --read-only "../${ubuntu_name}" cdrom
   rsync -av --quiet cdrom/ local
@@ -105,9 +128,9 @@ fi
   echo "New format: $NEW_FORMAT "
   if [ -n "$NEW_FORMAT" ]; then
     # copy autoinstall folders for grub
-    $sudo cp -r ../autoinstall/nocloud-dhcp  local/
-    $sudo cp -r ../autoinstall/nocloud-nodhcp  local/
-    $sudo cp ../isolinux/grub-new-format.cfg local/boot/grub/grub.cfg
+    $sudo cp -r ../autoinstall/${AUTOINSTALL}-dhcp  local/
+    $sudo cp -r ../autoinstall/${AUTOINSTALL}-nodhcp  local/
+    $sudo cp ../isolinux/grub-${AUTOINSTALL}.cfg local/boot/grub/grub.cfg
   else
     $sudo cp ../preseed/* local/preseed/
     $sudo cp ../isolinux/txt.cfg local/isolinux/txt.cfg
@@ -148,4 +171,4 @@ fi
   $sudo chown $USER:$USER "../${ona_name}"
   $sudo rm -rf "$DIR"/working
 )
- 
+
